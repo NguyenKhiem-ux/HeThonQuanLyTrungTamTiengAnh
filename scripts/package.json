@@ -1,0 +1,13 @@
+{
+  "name": "english-center-demo-seed",
+  "private": true,
+  "scripts": {
+    "seed-demo": "node seed_demo_accounts.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}

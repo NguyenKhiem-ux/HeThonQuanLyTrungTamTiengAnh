@@ -1,0 +1,812 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isDesignatedAdmin() {
+      return signedIn()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active'
+             && exists(/databases/$(database)/documents/system/admin)
+             && get(/databases/$(database)/documents/system/admin).data.uid == request.auth.uid;
+    }
+
+    function isActiveConsultant() {
+      return signedIn()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'consultant'
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isActiveTeacherAccount() {
+      return signedIn()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher'
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isActiveStudentAccount() {
+      return signedIn()
+             && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+             && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isTeacherAssignedToClass(classId) {
+      return isActiveTeacherAccount()
+             && exists(/databases/$(database)/documents/teacher_assignments/$(classId))
+             && get(/databases/$(database)/documents/teacher_assignments/$(classId)).data.teacherUid == request.auth.uid;
+    }
+
+    function isOwnStudent(studentId) {
+      return isActiveStudentAccount()
+             && exists(/databases/$(database)/documents/students/$(studentId))
+             && get(/databases/$(database)/documents/students/$(studentId)).data.userUid == request.auth.uid;
+    }
+
+    function hasActiveEnrollment(classId, studentId) {
+      let enrollmentId = classId + '_' + studentId;
+      return exists(/databases/$(database)/documents/enrollments/$(enrollmentId))
+             && get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.classId == classId
+             && get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.studentId == studentId
+             && get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.status == 'active';
+    }
+
+    function canManageEnrollmentData() {
+      return isDesignatedAdmin() || isActiveConsultant();
+    }
+
+    function validStaffStatusUpdate() {
+      return resource.data.role in ['teacher', 'consultant']
+             && resource.data.status in ['pending', 'active', 'inactive']
+             && request.resource.data.status in ['pending', 'active', 'inactive']
+             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+             && (
+               (resource.data.status == 'pending'
+                && request.resource.data.status in ['active', 'inactive'])
+               || (resource.data.status == 'active'
+                   && request.resource.data.status == 'inactive')
+               || (resource.data.status == 'inactive'
+                   && request.resource.data.status == 'active')
+             );
+    }
+
+    function validCourse(data) {
+      return data.keys().hasAll([
+               'name', 'program', 'durationMonths', 'standardTuition',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'name', 'program', 'durationMonths', 'standardTuition',
+               'createdAt', 'updatedAt'
+             ])
+             && data.name is string
+             && data.name.size() > 0
+             && data.program is string
+             && data.program.size() > 0
+             && data.durationMonths is int
+             && data.durationMonths > 0
+             && data.standardTuition is number
+             && data.standardTuition >= 0
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validClass(data) {
+      return data.keys().hasAll([
+               'name', 'courseId', 'minStudents', 'maxStudents', 'status',
+               'studyPattern', 'shiftCode',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'name', 'courseId', 'minStudents', 'maxStudents', 'status',
+               'studyPattern', 'shiftCode',
+               'createdAt', 'updatedAt'
+             ])
+             && data.name is string
+             && data.name.size() > 0
+             && data.courseId is string
+             && data.courseId.size() > 0
+             && data.minStudents is int
+             && data.minStudents > 0
+             && data.maxStudents is int
+             && data.maxStudents >= data.minStudents
+             && data.studyPattern in ['246', '357']
+             && data.shiftCode in ['evening_1', 'evening_2']
+             && data.status in ['pending', 'ongoing', 'completed']
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validClassStatusTransition() {
+      return request.resource.data.status == resource.data.status
+             || (resource.data.status == 'pending'
+                 && request.resource.data.status == 'ongoing')
+             || (resource.data.status == 'ongoing'
+                 && request.resource.data.status == 'completed');
+    }
+
+    function validRoom(data) {
+      return data.keys().hasAll([
+               'name', 'capacity', 'status', 'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'name', 'capacity', 'status', 'createdAt', 'updatedAt'
+             ])
+             && data.name is string
+             && data.name.size() > 0
+             && data.capacity is int
+             && data.capacity > 0
+             && data.status in ['active', 'inactive']
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validRoomAllocation(data) {
+      return data.keys().hasAll([
+               'roomId', 'classId', 'weekday', 'startMinute', 'endMinute',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'roomId', 'classId', 'weekday', 'startMinute', 'endMinute',
+               'createdAt', 'updatedAt'
+             ])
+             && data.roomId is string
+             && data.roomId.size() > 0
+             && data.classId is string
+             && data.classId.size() > 0
+             && data.weekday is int
+             && data.weekday >= 1
+             && data.weekday <= 7
+             && data.startMinute is int
+             && data.endMinute is int
+             && data.startMinute >= 0
+             && data.startMinute < data.endMinute
+             && data.endMinute <= 1440
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validAllocationReferences(data) {
+      let targetClass = get(/databases/$(database)/documents/classes/$(data.classId)).data;
+      return exists(/databases/$(database)/documents/rooms/$(data.roomId))
+             && exists(/databases/$(database)/documents/classes/$(data.classId))
+             && get(/databases/$(database)/documents/rooms/$(data.roomId)).data.status == 'active'
+             && targetClass.status != 'completed'
+             && get(/databases/$(database)/documents/rooms/$(data.roomId)).data.capacity
+                >= targetClass.maxStudents
+             && (
+               (targetClass.studyPattern == '246' && data.weekday in [1, 3, 5])
+               || (targetClass.studyPattern == '357' && data.weekday in [2, 4, 6])
+             )
+             && (
+               (targetClass.shiftCode == 'evening_1'
+                && data.startMinute == 1080
+                && data.endMinute == 1185)
+               || (targetClass.shiftCode == 'evening_2'
+                   && data.startMinute == 1200
+                   && data.endMinute == 1305)
+             );
+    }
+
+    function validTeacher(data) {
+      return data.keys().hasAll([
+               'fullName', 'email', 'phone', 'specialty', 'status', 'userUid',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'fullName', 'email', 'phone', 'specialty', 'status', 'userUid',
+               'createdAt', 'updatedAt'
+             ])
+             && data.fullName is string
+             && data.fullName.size() > 0
+             && data.email is string
+             && data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$')
+             && data.phone is string
+             && (data.phone == ''
+                 || data.phone.matches('^([+][0-9]{8,15}|[0-9]{8,15})$'))
+             && data.specialty is string
+             && data.status in ['active', 'inactive']
+             && (data.userUid == null
+                 || (data.userUid is string && data.userUid.size() > 0))
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validTeacherLink(data) {
+      return data.userUid == null
+             || (existsAfter(/databases/$(database)/documents/users/$(data.userUid))
+                 && getAfter(/databases/$(database)/documents/users/$(data.userUid)).data.role == 'teacher'
+                 && (
+                   (data.status == 'active'
+                    && getAfter(/databases/$(database)/documents/users/$(data.userUid)).data.status == 'active')
+                   || (data.status == 'inactive'
+                       && getAfter(/databases/$(database)/documents/users/$(data.userUid)).data.status in ['active', 'inactive'])
+                 ));
+    }
+
+    function validTeacherAssignment(data, classId) {
+      return data.keys().hasAll([
+               'classId', 'teacherId', 'teacherUid', 'assignedAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'classId', 'teacherId', 'teacherUid', 'assignedAt', 'updatedAt'
+             ])
+             && data.classId == classId
+             && data.teacherId is string
+             && data.teacherId.size() > 0
+             && data.teacherUid is string
+             && data.teacherUid.size() > 0
+             && data.assignedAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validTeacherAssignmentReferences(data) {
+      return exists(/databases/$(database)/documents/teachers/$(data.teacherId))
+             && get(/databases/$(database)/documents/teachers/$(data.teacherId)).data.status == 'active'
+             && get(/databases/$(database)/documents/teachers/$(data.teacherId)).data.userUid == data.teacherUid
+             && exists(/databases/$(database)/documents/users/$(data.teacherUid))
+             && get(/databases/$(database)/documents/users/$(data.teacherUid)).data.role == 'teacher'
+             && get(/databases/$(database)/documents/users/$(data.teacherUid)).data.status == 'active'
+             && exists(/databases/$(database)/documents/classes/$(data.classId))
+             && get(/databases/$(database)/documents/classes/$(data.classId)).data.status != 'completed';
+    }
+
+    function validStudent(data) {
+      return data.keys().hasAll([
+               'fullName', 'email', 'phone', 'dateOfBirth', 'gender',
+               'consultationNote', 'status', 'userUid', 'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'fullName', 'email', 'phone', 'dateOfBirth', 'gender',
+               'consultationNote', 'status', 'userUid', 'createdAt', 'updatedAt'
+             ])
+             && data.fullName is string
+             && data.fullName.size() > 0
+             && data.email is string
+             && (data.email == ''
+                 || data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$'))
+             && data.phone is string
+             && (data.phone == ''
+                 || data.phone.matches('^([+][0-9]{8,15}|[0-9]{8,15})$'))
+             && (data.dateOfBirth == null || data.dateOfBirth is timestamp)
+             && (data.gender == null
+                 || data.gender in ['male', 'female', 'other'])
+             && data.consultationNote is string
+             && data.status in ['active', 'inactive']
+             && (data.userUid == null
+                 || (data.userUid is string && data.userUid.size() > 0))
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validStudentLink(data) {
+      return data.userUid == null
+             || (existsAfter(/databases/$(database)/documents/users/$(data.userUid))
+                 && getAfter(/databases/$(database)/documents/users/$(data.userUid)).data.role == 'student');
+    }
+
+    function isSelfStudentProfileCreate(studentId, data) {
+      return signedIn()
+             && studentId == request.auth.uid
+             && data.userUid == request.auth.uid
+             && data.email == request.auth.token.email
+             && data.phone == ''
+             && data.dateOfBirth == null
+             && data.gender == null
+             && data.consultationNote == ''
+             && data.status == 'active'
+             && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+             && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.uid == request.auth.uid
+             && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.fullName == data.fullName
+             && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.email == data.email
+             && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+             && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function validEnrollment(data) {
+      return data.keys().hasAll([
+               'studentId', 'classId', 'status', 'enrolledAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'classId', 'status', 'enrolledAt', 'updatedAt'
+             ])
+             && data.studentId is string
+             && data.studentId.size() > 0
+             && data.classId is string
+             && data.classId.size() > 0
+             && data.status in ['active', 'cancelled']
+             && data.enrolledAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function enrollmentClassCourseId(classId) {
+      return get(/databases/$(database)/documents/classes/$(classId)).data.courseId;
+    }
+
+    function validEnrollmentReferences(data) {
+      return exists(/databases/$(database)/documents/students/$(data.studentId))
+             && exists(/databases/$(database)/documents/classes/$(data.classId))
+             && get(/databases/$(database)/documents/students/$(data.studentId)).data.status == 'active'
+             && get(/databases/$(database)/documents/classes/$(data.classId)).data.status == 'pending'
+             && exists(/databases/$(database)/documents/courses/$(enrollmentClassCourseId(data.classId)));
+    }
+
+    function validClassRegistrationRequest(data) {
+      return data.keys().hasAll([
+               'studentId', 'studentUid', 'requestedClassId',
+               'assignedClassId', 'status', 'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'studentUid', 'requestedClassId',
+               'assignedClassId', 'status', 'createdAt', 'updatedAt'
+             ])
+             && data.studentId is string
+             && data.studentId.size() > 0
+             && data.studentUid is string
+             && data.studentUid.size() > 0
+             && data.requestedClassId is string
+             && data.requestedClassId.size() > 0
+             && (data.assignedClassId == null
+                 || (data.assignedClassId is string
+                     && data.assignedClassId.size() > 0))
+             && data.status in [
+               'pending', 'awaiting_student_confirmation',
+               'student_confirmed', 'approved', 'rejected'
+             ]
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validRegistrationClass(classId) {
+      return exists(/databases/$(database)/documents/classes/$(classId))
+             && get(/databases/$(database)/documents/classes/$(classId)).data.status == 'pending'
+             && get(/databases/$(database)/documents/classes/$(classId)).data.studyPattern in ['246', '357']
+             && get(/databases/$(database)/documents/classes/$(classId)).data.shiftCode in ['evening_1', 'evening_2'];
+    }
+
+    function registrationTargetClass(data) {
+      return data.assignedClassId == null
+             ? data.requestedClassId
+             : data.assignedClassId;
+    }
+
+    function isSameRegistrationCourse(firstClassId, secondClassId) {
+      return exists(/databases/$(database)/documents/classes/$(firstClassId))
+             && exists(/databases/$(database)/documents/classes/$(secondClassId))
+             && get(/databases/$(database)/documents/classes/$(firstClassId)).data.courseId
+                == get(/databases/$(database)/documents/classes/$(secondClassId)).data.courseId;
+    }
+
+    function hasApprovedEnrollment(data) {
+      let classId = registrationTargetClass(data);
+      let enrollmentId = classId + '_' + data.studentId;
+      return data.status != 'approved'
+             || (existsAfter(/databases/$(database)/documents/enrollments/$(enrollmentId))
+                 && getAfter(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.studentId == data.studentId
+                 && getAfter(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.classId == classId
+                 && getAfter(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.status == 'active');
+    }
+
+    function validAttendanceSession(data, sessionId) {
+      return data.keys().hasAll([
+               'classId', 'dateKey', 'createdByUid', 'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'classId', 'dateKey', 'createdByUid', 'createdAt', 'updatedAt'
+             ])
+             && data.classId is string
+             && data.classId.size() > 0
+             && data.dateKey is string
+             && data.dateKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+             && sessionId == data.classId + '_'
+                             + data.dateKey.replace('-', '')
+             && data.createdByUid is string
+             && data.createdByUid.size() > 0
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp;
+    }
+
+    function validAttendanceRecord(data, recordId) {
+      return data.keys().hasAll([
+               'sessionId', 'classId', 'studentId', 'status', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'sessionId', 'classId', 'studentId', 'status', 'updatedAt'
+             ])
+             && data.sessionId is string
+             && data.sessionId.size() > 0
+             && data.classId is string
+             && data.classId.size() > 0
+             && data.studentId is string
+             && data.studentId.size() > 0
+             && recordId == data.sessionId + '_' + data.studentId
+             && data.status in ['present', 'absent', 'excused']
+             && data.updatedAt is timestamp;
+    }
+
+    function validAttendanceRecordReferences(data) {
+      return existsAfter(/databases/$(database)/documents/attendance_sessions/$(data.sessionId))
+             && getAfter(/databases/$(database)/documents/attendance_sessions/$(data.sessionId)).data.classId == data.classId
+             && hasActiveEnrollment(data.classId, data.studentId)
+             && exists(/databases/$(database)/documents/classes/$(data.classId))
+             && get(/databases/$(database)/documents/classes/$(data.classId)).data.status == 'ongoing';
+    }
+
+    function validOptionalScore(score) {
+      return score == null
+             || (score is number && score >= 0 && score <= 10);
+    }
+
+    function validLearningResult(data, resultId) {
+      return data.keys().hasAll([
+               'classId', 'studentId', 'midtermScore', 'finalScore',
+               'comment', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'classId', 'studentId', 'midtermScore', 'finalScore',
+               'comment', 'updatedAt'
+             ])
+             && data.classId is string
+             && data.classId.size() > 0
+             && data.studentId is string
+             && data.studentId.size() > 0
+             && resultId == data.classId + '_' + data.studentId
+             && validOptionalScore(data.midtermScore)
+             && validOptionalScore(data.finalScore)
+             && data.comment is string
+             && data.comment.size() <= 1000
+             && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn()
+                 && (request.auth.uid == userId || canManageEnrollmentData());
+      allow list: if isDesignatedAdmin()
+                  && resource.data.role in ['teacher', 'consultant'];
+
+      allow create: if signedIn()
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasAll([
+                      'uid', 'fullName', 'email', 'role', 'status', 'createdAt'
+                    ])
+                    && request.resource.data.keys().hasOnly([
+                      'uid', 'fullName', 'email', 'role', 'status', 'createdAt'
+                    ])
+                    && request.resource.data.uid == userId
+                    && request.resource.data.fullName is string
+                    && request.resource.data.fullName.size() > 0
+                    && request.resource.data.email == request.auth.token.email
+                    && (
+                      (request.resource.data.role == 'student'
+                       && request.resource.data.status == 'active'
+                       && existsAfter(/databases/$(database)/documents/students/$(userId))
+                       && getAfter(/databases/$(database)/documents/students/$(userId)).data.userUid == userId)
+                      || ((request.resource.data.role == 'teacher'
+                           || request.resource.data.role == 'consultant')
+                          && request.resource.data.status == 'pending')
+                    )
+                    && request.resource.data.createdAt == request.time;
+
+      allow update: if isDesignatedAdmin() && validStaffStatusUpdate();
+      allow delete: if false;
+    }
+
+    match /system/{documentId} {
+      allow get: if documentId == 'admin' && isDesignatedAdmin();
+      allow list, create, update, delete: if false;
+    }
+
+    match /courses/{courseId} {
+      allow get: if canManageEnrollmentData()
+                 || isActiveTeacherAccount()
+                 || isActiveStudentAccount();
+      allow list: if canManageEnrollmentData() || isActiveStudentAccount();
+      allow create: if isDesignatedAdmin()
+                    && validCourse(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validCourse(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if isDesignatedAdmin();
+    }
+
+    match /classes/{classId} {
+      allow get: if canManageEnrollmentData()
+                 || isTeacherAssignedToClass(classId)
+                 || isActiveStudentAccount();
+      allow list: if canManageEnrollmentData() || isActiveStudentAccount();
+      allow create: if isDesignatedAdmin()
+                    && validClass(request.resource.data)
+                    && request.resource.data.status == 'pending'
+                    && exists(/databases/$(database)/documents/courses/$(request.resource.data.courseId))
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validClass(request.resource.data)
+                    && resource.data.status != 'completed'
+                    && validClassStatusTransition()
+                    && (resource.data.status == 'pending'
+                        || request.resource.data.courseId == resource.data.courseId)
+                    && (resource.data.status == 'pending'
+                        || (request.resource.data.studyPattern == resource.data.studyPattern
+                            && request.resource.data.shiftCode == resource.data.shiftCode))
+                    && exists(/databases/$(database)/documents/courses/$(request.resource.data.courseId))
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if isDesignatedAdmin()
+                    && resource.data.status == 'pending'
+                    && !exists(/databases/$(database)/documents/teacher_assignments/$(classId));
+    }
+
+    match /rooms/{roomId} {
+      allow get: if isDesignatedAdmin()
+                 || isActiveTeacherAccount()
+                 || isActiveStudentAccount();
+      allow list: if isDesignatedAdmin() || isActiveStudentAccount();
+      allow create: if isDesignatedAdmin()
+                    && validRoom(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validRoom(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if isDesignatedAdmin();
+    }
+
+    match /room_allocations/{allocationId} {
+      allow get: if isDesignatedAdmin()
+                 || isTeacherAssignedToClass(resource.data.classId)
+                 || isActiveStudentAccount();
+      allow list: if isDesignatedAdmin()
+                  || isTeacherAssignedToClass(resource.data.classId)
+                  || isActiveStudentAccount();
+      allow create: if isDesignatedAdmin()
+                    && validRoomAllocation(request.resource.data)
+                    && validAllocationReferences(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validRoomAllocation(request.resource.data)
+                    && validAllocationReferences(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if isDesignatedAdmin();
+    }
+
+    match /teachers/{teacherId} {
+      allow get: if isDesignatedAdmin()
+                 || isActiveStudentAccount()
+                 || (isActiveTeacherAccount()
+                     && resource.data.userUid == request.auth.uid);
+      allow list: if isDesignatedAdmin()
+                  || (isActiveTeacherAccount()
+                      && resource.data.userUid == request.auth.uid);
+      allow create: if isDesignatedAdmin()
+                    && validTeacher(request.resource.data)
+                    && validTeacherLink(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validTeacher(request.resource.data)
+                    && validTeacherLink(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /teacher_assignments/{classId} {
+      allow get: if isDesignatedAdmin()
+                 || isActiveStudentAccount()
+                 || (isActiveTeacherAccount()
+                     && resource.data.teacherUid == request.auth.uid);
+      allow list: if isDesignatedAdmin()
+                  || (isActiveTeacherAccount()
+                      && resource.data.teacherUid == request.auth.uid);
+      allow create: if isDesignatedAdmin()
+                    && validTeacherAssignment(request.resource.data, classId)
+                    && validTeacherAssignmentReferences(request.resource.data)
+                    && request.resource.data.assignedAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isDesignatedAdmin()
+                    && validTeacherAssignment(request.resource.data, classId)
+                    && validTeacherAssignmentReferences(request.resource.data)
+                    && request.resource.data.assignedAt == resource.data.assignedAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if isDesignatedAdmin();
+    }
+
+    match /students/{studentId} {
+      allow get: if canManageEnrollmentData()
+                 || isActiveTeacherAccount()
+                 || (isActiveStudentAccount()
+                     && resource.data.userUid == request.auth.uid);
+      allow list: if canManageEnrollmentData()
+                  || (isActiveStudentAccount()
+                      && resource.data.userUid == request.auth.uid);
+      allow create: if validStudent(request.resource.data)
+                    && validStudentLink(request.resource.data)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && (canManageEnrollmentData()
+                        || isSelfStudentProfileCreate(
+                             studentId,
+                             request.resource.data
+                           ));
+      allow update: if canManageEnrollmentData()
+                    && validStudent(request.resource.data)
+                    && validStudentLink(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /enrollments/{enrollmentId} {
+      allow get, list: if canManageEnrollmentData()
+                       || isTeacherAssignedToClass(resource.data.classId)
+                       || isOwnStudent(resource.data.studentId);
+      allow create: if canManageEnrollmentData()
+                    && validEnrollment(request.resource.data)
+                    && request.resource.data.status == 'active'
+                    && enrollmentId == request.resource.data.classId
+                                       + '_' + request.resource.data.studentId
+                    && validEnrollmentReferences(request.resource.data)
+                    && request.resource.data.enrolledAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if canManageEnrollmentData()
+                    && validEnrollment(request.resource.data)
+                    && request.resource.data.studentId == resource.data.studentId
+                    && request.resource.data.classId == resource.data.classId
+                    && enrollmentId == resource.data.classId
+                                       + '_' + resource.data.studentId
+                    && request.resource.data.updatedAt == request.time
+                    && (
+                      (resource.data.status == 'active'
+                       && request.resource.data.status == 'cancelled'
+                       && request.resource.data.enrolledAt == resource.data.enrolledAt)
+                      || (resource.data.status == 'cancelled'
+                          && request.resource.data.status == 'active'
+                          && validEnrollmentReferences(request.resource.data)
+                          && request.resource.data.enrolledAt == request.time)
+                    );
+      allow delete: if false;
+    }
+
+    match /class_registration_requests/{requestId} {
+      allow get, list: if canManageEnrollmentData()
+                       || (isActiveStudentAccount()
+                           && resource.data.studentUid == request.auth.uid);
+      allow create: if isActiveStudentAccount()
+                    && validClassRegistrationRequest(request.resource.data)
+                    && isOwnStudent(request.resource.data.studentId)
+                    && request.resource.data.studentUid == request.auth.uid
+                    && request.resource.data.assignedClassId == null
+                    && request.resource.data.status == 'pending'
+                    && validRegistrationClass(request.resource.data.requestedClassId)
+                    && !hasActiveEnrollment(
+                         request.resource.data.requestedClassId,
+                         request.resource.data.studentId
+                       )
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if validClassRegistrationRequest(request.resource.data)
+                    && request.resource.data.studentId == resource.data.studentId
+                    && request.resource.data.studentUid == resource.data.studentUid
+                    && request.resource.data.requestedClassId == resource.data.requestedClassId
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time
+                    && (
+                      (isActiveStudentAccount()
+                       && resource.data.studentUid == request.auth.uid
+                       && request.resource.data.assignedClassId == resource.data.assignedClassId
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                         'status', 'updatedAt'
+                       ])
+                       && resource.data.status == 'awaiting_student_confirmation'
+                       && request.resource.data.status in ['student_confirmed', 'rejected'])
+                      || (canManageEnrollmentData()
+                          && (
+                            (resource.data.status == 'pending'
+                             && request.resource.data.status == 'awaiting_student_confirmation'
+                             && request.resource.data.assignedClassId is string
+                             && request.resource.data.assignedClassId != resource.data.requestedClassId
+                             && isSameRegistrationCourse(
+                                  resource.data.requestedClassId,
+                                  request.resource.data.assignedClassId
+                                )
+                             && validRegistrationClass(request.resource.data.assignedClassId))
+                            || (resource.data.status == 'pending'
+                                && request.resource.data.status == 'approved'
+                                && request.resource.data.assignedClassId == null)
+                            || (resource.data.status == 'student_confirmed'
+                                && request.resource.data.status == 'approved'
+                                && request.resource.data.assignedClassId == resource.data.assignedClassId)
+                            || (resource.data.status in [
+                                  'pending', 'awaiting_student_confirmation',
+                                  'student_confirmed'
+                                ]
+                                && request.resource.data.status == 'rejected'
+                                && request.resource.data.assignedClassId == resource.data.assignedClassId)
+                          )
+                          && (request.resource.data.status == 'rejected'
+                              || validRegistrationClass(registrationTargetClass(request.resource.data)))
+                          && hasApprovedEnrollment(request.resource.data))
+                    );
+      allow delete: if false;
+    }
+
+    match /attendance_sessions/{sessionId} {
+      allow get, list: if isDesignatedAdmin()
+                       || isTeacherAssignedToClass(resource.data.classId);
+      allow create: if isTeacherAssignedToClass(request.resource.data.classId)
+                    && validAttendanceSession(request.resource.data, sessionId)
+                    && request.resource.data.createdByUid == request.auth.uid
+                    && exists(/databases/$(database)/documents/classes/$(request.resource.data.classId))
+                    && get(/databases/$(database)/documents/classes/$(request.resource.data.classId)).data.status == 'ongoing'
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isTeacherAssignedToClass(resource.data.classId)
+                    && validAttendanceSession(request.resource.data, sessionId)
+                    && request.resource.data.classId == resource.data.classId
+                    && request.resource.data.dateKey == resource.data.dateKey
+                    && request.resource.data.createdByUid == resource.data.createdByUid
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && exists(/databases/$(database)/documents/classes/$(resource.data.classId))
+                    && get(/databases/$(database)/documents/classes/$(resource.data.classId)).data.status == 'ongoing'
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /attendance_records/{recordId} {
+      allow get, list: if isDesignatedAdmin()
+                       || isTeacherAssignedToClass(resource.data.classId)
+                       || isOwnStudent(resource.data.studentId);
+      allow create: if isTeacherAssignedToClass(request.resource.data.classId)
+                    && validAttendanceRecord(request.resource.data, recordId)
+                    && validAttendanceRecordReferences(request.resource.data)
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isTeacherAssignedToClass(resource.data.classId)
+                    && validAttendanceRecord(request.resource.data, recordId)
+                    && request.resource.data.sessionId == resource.data.sessionId
+                    && request.resource.data.classId == resource.data.classId
+                    && request.resource.data.studentId == resource.data.studentId
+                    && validAttendanceRecordReferences(request.resource.data)
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /learning_results/{resultId} {
+      allow get, list: if isDesignatedAdmin()
+                       || isTeacherAssignedToClass(resource.data.classId)
+                       || isOwnStudent(resource.data.studentId);
+      allow create: if isTeacherAssignedToClass(request.resource.data.classId)
+                    && validLearningResult(request.resource.data, resultId)
+                    && hasActiveEnrollment(
+                         request.resource.data.classId,
+                         request.resource.data.studentId
+                       )
+                    && request.resource.data.updatedAt == request.time;
+      allow update: if isTeacherAssignedToClass(resource.data.classId)
+                    && validLearningResult(request.resource.data, resultId)
+                    && request.resource.data.classId == resource.data.classId
+                    && request.resource.data.studentId == resource.data.studentId
+                    && hasActiveEnrollment(
+                         request.resource.data.classId,
+                         request.resource.data.studentId
+                       )
+                    && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
