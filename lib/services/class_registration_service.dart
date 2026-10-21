@@ -52,17 +52,18 @@ class ClassRegistrationService {
           .collection('class_registration_requests')
           .where('studentUid', isEqualTo: studentUid)
           .get(),
-      _activeEnrollmentsForClass(englishClass.id),
       _firestore
           .collection('enrollments')
-          .doc(Enrollment.documentId(englishClass.id, student.id))
+          .where('studentId', isEqualTo: student.id)
           .get(),
     ]);
-    final currentRequests = results[0] as QuerySnapshot<Map<String, dynamic>>;
-    final activeEnrollments = results[1] as QuerySnapshot<Map<String, dynamic>>;
-    final currentEnrollment =
-        results[2] as DocumentSnapshot<Map<String, dynamic>>;
-    if (currentEnrollment.data()?['status'] == 'active') {
+    final currentRequests = results[0];
+    final ownEnrollments = results[1];
+    final alreadyEnrolled = ownEnrollments.docs.any((document) {
+      final data = document.data();
+      return data['classId'] == englishClass.id && data['status'] == 'active';
+    });
+    if (alreadyEnrolled) {
       throw StateError('Bạn đã được xếp vào lớp này.');
     }
     final hasOpenRequest = currentRequests.docs.any((document) {
@@ -77,16 +78,12 @@ class ClassRegistrationService {
       studentActive: student.isActive,
       classStatus: englishClass.status,
       hasSchedule: englishClass.hasConfiguredSchedule,
-      remainingSlots: ClassRegistrationPolicy.remainingSlots(
-        maxStudents: englishClass.maxStudents,
-        activeEnrollments: activeEnrollments.docs.length,
-      ),
+      remainingSlots: null,
       hasOpenRequest: hasOpenRequest,
     );
     if (error != null) throw StateError(error);
 
-    // shortcut: chặn trùng và đếm sĩ số ở client có thể race; MVP chưa có
-    // backend giao dịch để khóa đồng thời toàn bộ yêu cầu đăng ký.
+    // shortcut: kiểm tra sức chứa khi tư vấn viên duyệt để không lộ enrollment của học viên khác.
     final timestamp = FieldValue.serverTimestamp();
     await _firestore.collection('class_registration_requests').add({
       'studentId': student.id,

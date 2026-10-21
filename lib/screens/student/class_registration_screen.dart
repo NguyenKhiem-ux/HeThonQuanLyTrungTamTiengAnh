@@ -120,7 +120,9 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
       builder: (context, courseSnapshot) => StreamBuilder<List<EnglishClass>>(
         stream: ClassService.instance.watchClasses(),
         builder: (context, classSnapshot) => StreamBuilder<List<Enrollment>>(
-          stream: EnrollmentService.instance.watchEnrollments(),
+          stream: EnrollmentService.instance.watchEnrollmentsForStudent(
+            student.id,
+          ),
           builder: (context, enrollmentSnapshot) =>
               StreamBuilder<List<ClassRegistrationRequest>>(
                 stream: ClassRegistrationService.instance
@@ -182,14 +184,6 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
     final courseById = {for (final item in courses) item.id: item};
     final classById = {for (final item in classes) item.id: item};
     final roomById = {for (final item in rooms) item.id: item.name};
-    final activeCounts = <String, int>{};
-    for (final enrollment in enrollments.where((item) => item.isActive)) {
-      activeCounts.update(
-        enrollment.classId,
-        (value) => value + 1,
-        ifAbsent: () => 1,
-      );
-    }
     final openRequest = requests.where((item) => item.isOpen).firstOrNull;
     final availableClasses = classes.where((item) {
       if (item.status != 'pending') return false;
@@ -253,7 +247,6 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
               openRequest,
               classById,
               courseById,
-              activeCounts,
               allocations,
               roomById,
             ),
@@ -269,11 +262,6 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
                       final englishClass = availableClasses[index];
                       final course = courseById[englishClass.courseId];
                       if (course == null) return const SizedBox.shrink();
-                      final activeCount = activeCounts[englishClass.id] ?? 0;
-                      final remaining = ClassRegistrationPolicy.remainingSlots(
-                        maxStudents: englishClass.maxStudents,
-                        activeEnrollments: activeCount,
-                      );
                       final isEnrolled = enrollments.any(
                         (item) =>
                             item.isActive &&
@@ -288,7 +276,7 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
                         studentActive: student.isActive,
                         classStatus: englishClass.status,
                         hasSchedule: englishClass.hasConfiguredSchedule,
-                        remainingSlots: remaining,
+                        remainingSlots: null,
                         hasOpenRequest: openRequest != null,
                       );
                       return Card(
@@ -300,7 +288,7 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
                               RegistrationClassDetails(
                                 course: course,
                                 englishClass: englishClass,
-                                remainingSlots: remaining,
+                                remainingSlots: null,
                                 roomLabel: _roomLabel(
                                   englishClass.id,
                                   allocations,
@@ -348,7 +336,6 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
     ClassRegistrationRequest request,
     Map<String, EnglishClass> classById,
     Map<String, Course> courseById,
-    Map<String, int> activeCounts,
     List<RoomAllocation> allocations,
     Map<String, String> roomById,
   ) {
@@ -372,10 +359,7 @@ class _ClassRegistrationScreenState extends State<ClassRegistrationScreen> {
               RegistrationClassDetails(
                 course: course,
                 englishClass: englishClass,
-                remainingSlots: ClassRegistrationPolicy.remainingSlots(
-                  maxStudents: englishClass.maxStudents,
-                  activeEnrollments: activeCounts[englishClass.id] ?? 0,
-                ),
+                remainingSlots: null,
                 roomLabel: _roomLabel(englishClass.id, allocations, roomById),
               ),
             ],
@@ -431,7 +415,7 @@ class RegistrationClassDetails extends StatelessWidget {
 
   final Course course;
   final EnglishClass englishClass;
-  final int remainingSlots;
+  final int? remainingSlots;
   final String roomLabel;
 
   @override
@@ -446,7 +430,11 @@ class RegistrationClassDetails extends StatelessWidget {
         Text('Thời lượng: ${course.durationLabel}'),
         Text(englishClass.studyPatternLabel),
         Text(englishClass.shiftLabel),
-        Text('Sĩ số còn lại: $remainingSlots'),
+        Text(
+          remainingSlots == null
+              ? 'Sĩ số tối đa: ${englishClass.maxStudents}'
+              : 'Sĩ số còn lại: $remainingSlots',
+        ),
         Text('Phòng: $roomLabel'),
       ],
     );

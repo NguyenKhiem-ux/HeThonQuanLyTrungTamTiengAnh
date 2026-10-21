@@ -4,6 +4,7 @@ import 'package:english_center_management/models/enrollment.dart';
 import 'package:english_center_management/models/room.dart';
 import 'package:english_center_management/models/room_allocation.dart';
 import 'package:english_center_management/screens/student/student_schedule_screen.dart';
+import 'package:english_center_management/screens/student/class_registration_screen.dart';
 import 'package:english_center_management/services/student_schedule_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -291,5 +292,26 @@ void main() {
       expect(attempts, 2);
       expect(find.text('Bạn chưa được xếp vào lớp học nào.'), findsOneWidget);
     });
+  });
+
+  testWidgets('registration does not show a guessed remaining capacity', (
+    tester,
+  ) async {
+    final value = englishClass(id: 'class-1', name: 'IELTS A1');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RegistrationClassDetails(
+            course: course,
+            englishClass: value,
+            remainingSlots: null,
+            roomLabel: 'Chưa phân phòng',
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Sĩ số tối đa: 20'), findsOneWidget);
+    expect(find.textContaining('Sĩ số còn lại'), findsNothing);
   });
 }

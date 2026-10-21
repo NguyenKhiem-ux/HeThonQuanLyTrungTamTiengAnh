@@ -91,13 +91,15 @@ class ClassRegistrationPolicy {
     required bool studentActive,
     required String classStatus,
     required bool hasSchedule,
-    required int remainingSlots,
+    required int? remainingSlots,
     required bool hasOpenRequest,
   }) {
     if (!studentActive) return 'Hồ sơ học viên không hoạt động.';
     if (classStatus != 'pending') return 'Lớp không còn nhận đăng ký.';
     if (!hasSchedule) return 'Lớp chưa thiết lập lịch học và ca học.';
-    if (remainingSlots <= 0) return 'Lớp đã đủ sĩ số.';
+    if (remainingSlots != null && remainingSlots <= 0) {
+      return 'Lớp đã đủ sĩ số.';
+    }
     if (hasOpenRequest) return 'Bạn đang có một yêu cầu chờ xử lý.';
     return null;
   }

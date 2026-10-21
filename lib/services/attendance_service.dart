@@ -133,11 +133,18 @@ class AttendanceService {
     final sessionReference = _firestore
         .collection('attendance_sessions')
         .doc(sessionId);
-    final sessionDocument = await sessionReference.get();
+    // A missing document has no resource.classId for Rules to authorize.
+    final sessionSnapshot = await _firestore
+        .collection('attendance_sessions')
+        .where('classId', isEqualTo: classId)
+        .get();
+    final sessionExists = sessionSnapshot.docs.any(
+      (document) => document.id == sessionId,
+    );
     final timestamp = FieldValue.serverTimestamp();
     // shortcut: batch lớn có thể chạm giới hạn 20 document-access calls của Rules; chuyển sang backend khi lớp thường xuyên lưu nhiều học viên cùng lúc.
     final batch = _firestore.batch();
-    if (sessionDocument.exists) {
+    if (sessionExists) {
       batch.update(sessionReference, {'updatedAt': timestamp});
     } else {
       batch.set(sessionReference, {
